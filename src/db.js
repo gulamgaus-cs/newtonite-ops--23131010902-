@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite'; // built into Node 22.13+, no native build needed
 import crypto from 'node:crypto';
 
 export const ROLES = { viewer: 1, member: 2, lead: 3, admin: 4 };
@@ -14,10 +14,16 @@ export const verify = (pw, stored) => {
 };
 
 export function openDb(file = ':memory:') {
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+  // Transaction helper (BEGIN IMMEDIATE; nested calls use savepoints). All writes go through it.
+  let depth = 0;
+  db.transaction = (fn) => (...args) => {
+    const outer = depth === 0, sp = `sp${depth}`;
+    db.exec(outer ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${sp}`); depth++;
+    try { const r = fn(...args); depth--; db.exec(outer ? 'COMMIT' : `RELEASE ${sp}`); return r; }
+    catch (e) { depth--; db.exec(outer ? 'ROLLBACK' : `ROLLBACK TO ${sp}; RELEASE ${sp}`); throw e; }
+  };
   const hadFts = db.prepare("SELECT 1 FROM sqlite_master WHERE name='items_fts'").get();
   db.exec(`
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, pw_hash TEXT NOT NULL);

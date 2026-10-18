@@ -9,10 +9,9 @@
     "test": "node --test"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
     "express": "^4.19.2"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13"
   }
 }
