@@ -3,7 +3,7 @@
 
 An internal web app to create, assign, track and resolve operational work items across teams. Server-enforced workflow, per-team roles, append-only history, and concurrency-safe actions (claim, versioned edits, idempotent retries, transactional outbox).
 
-## Run (Node 18+)
+## Run (Node 22.13+)
 ```bash
 npm install
 npm start          # http://localhost:3000  (auto-creates data.db and seeds 4 teams, 10 users, 5000 items)
