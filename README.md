@@ -1,3 +1,4 @@
+  Author: Gulam Gaus Khan | Roll No: 23131010902 | Galgotias University
 # Newtonite Ops — "Operations Under Pressure"
 
 An internal web app to create, assign, track and resolve operational work items across teams. Server-enforced workflow, per-team roles, append-only history, and concurrency-safe actions (claim, versioned edits, idempotent retries, transactional outbox).
