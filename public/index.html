@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ops Under Pressure</title>
+<style>
+:root{--bg:#f7f5f0;--fg:#1c2321;--mut:#68716d;--line:#d9d5ca;--card:#fff;--acc:#0f6b5c;--bad:#b3261e;--urgent:#c2410c}
+@media(prefers-color-scheme:dark){:root{--bg:#131715;--fg:#e8ece9;--mut:#8b9691;--line:#2b332f;--card:#1a201d;--acc:#4fc3a8;--bad:#ff8a80;--urgent:#ff9d5c}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 "Inter",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+header h1{font-size:16px;margin:0;flex:1;font-weight:700}
+main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:900px){main.split{grid-template-columns:1.2fr 1fr}}
+button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+button{cursor:pointer}button.p{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}.tabs button.on{background:var(--fg);color:var(--bg)}
+.tabs b{margin-left:6px;font-variant-numeric:tabular-nums}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.filters input{flex:1;min-width:140px}
+.row{display:grid;grid-template-columns:44px 1fr auto;gap:8px;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);margin-bottom:6px;cursor:pointer}
+.row:hover,.row.sel{border-color:var(--acc)}.row small{color:var(--mut)}
+.pri{font-weight:700}.pri.urgent{color:var(--urgent)}.pri.high{color:var(--urgent);opacity:.75}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;align-self:start;position:sticky;top:60px}
+.panel h2{margin:0 0 4px;font-size:17px}.meta{color:var(--mut);margin-bottom:10px}
+.actions{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tl{border-left:2px solid var(--line);margin:8px 0 0 4px;padding-left:12px}.tl div{margin-bottom:8px}.tl small{color:var(--mut);display:block}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;max-width:90%;display:none;z-index:9}
+#toast.bad{background:var(--bad);color:#fff}
+.login{max-width:340px;margin:12vh auto;display:grid;gap:10px}.login small{color:var(--mut)}
+details{margin:10px 0}details form{display:grid;gap:6px;margin-top:8px}
+.empty{color:var(--mut);padding:20px;text-align:center}
+</style></head><body>
+<header><h1>Operations Under Pressure</h1><span id="who"></span><button id="nb" hidden>Notifications</button><button id="out" hidden>Log out</button></header>
+<div id="toast" role="status"></div>
+<div id="app"></div>
+<script>
+let token = sessionStorage.getItem('t'), me, teams = [], view = '', cursor = null, cur = null, createKey = crypto.randomUUID();
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const label = (s) => s.replace(/_/g, ' ');
+const toast = (m, bad) => { const t = $('#toast'); t.textContent = m; t.className = bad ? 'bad' : ''; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 4000); };
+async function api(path, { method = 'GET', body, key } = {}) {
+  const r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', ...(token && { Authorization: 'Bearer ' + token }), ...(key && { 'Idempotency-Key': key }) }, body: body && JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && token) { logout(); }
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status, data: j });
+  return j;
+}
+function logout() { sessionStorage.removeItem('t'); token = null; location.reload(); }
+$('#out').onclick = logout;
+
+function loginView() {
+  $('#app').innerHTML = `<form class="login" id="lf"><h2>Log in</h2>
+    <input name="u" placeholder="Username" autocomplete="username" required><input name="p" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button class="p">Log in</button><small>Demo users: admin, alice (lead), bob (member), carol (lead), dave, erin (lead), frank, grace (lead), heidi, ivan (viewer). Password: password123</small></form>`;
+  $('#lf').onsubmit = async (e) => { e.preventDefault(); const f = new FormData(e.target);
+    try { const r = await api('/auth/login', { method: 'POST', body: { username: f.get('u'), password: f.get('p') } }); token = r.token; sessionStorage.setItem('t', token); boot(); }
+    catch (err) { toast(err.message, true); } };
+}
+async function boot() {
+  if (!token) return loginView();
+  me = await api('/me'); teams = await api('/teams');
+  $('#who').textContent = `${me.name} · ${me.teams.map((t) => t.name + ' ' + t.role).join(', ')}`; $('#out').hidden = false; $('#nb').hidden = false;
+  $('#app').innerHTML = `<main id="m"><section>
+    <div class="meta" id="metrics"></div><div class="tabs" id="tabs"></div>
+    <div class="filters"><input id="q" placeholder="Search title or description" aria-label="Search">
+      <select id="fs"><option value="">Any status</option>${['open','in_progress','awaiting_approval','resolved','closed'].map((s) => `<option value="${s}">${label(s)}</option>`).join('')}</select>
+      <select id="fp"><option value="">Any priority</option>${['urgent','high','medium','low'].map((s) => `<option>${s}</option>`).join('')}</select>
+      <select id="ft"><option value="">All teams</option>${teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select><button id="csv">Export CSV</button></div>
+    <details><summary>New item</summary><form id="nf"><input name="title" placeholder="Title" required maxlength="200"><textarea name="description" placeholder="What is happening?"></textarea>
+      <select name="type">${['incident','customer_issue','payment','compliance','task'].map((s) => `<option value="${s}">${label(s)}</option>`).join('')}</select>
+      <select name="priority">${['medium','low','high','urgent'].map((s) => `<option>${s}</option>`).join('')}</select>
+      <select name="team_id">${teams.filter((t) => t.role !== 'viewer').map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+      <input name="due_date" type="date"><button class="p">Create item</button></form></details>
+    <div id="list"></div><button id="more" hidden>Load more</button></section><aside id="detail"></aside></main>`;
+  let d; $('#q').oninput = () => { clearTimeout(d); d = setTimeout(() => loadList(true), 250); };
+  ['#fs', '#fp', '#ft'].forEach((s) => ($(s).onchange = () => loadList(true)));
+  $('#more').onclick = () => loadList(false);
+  $('#csv').onclick = async () => { const p = new URLSearchParams(); if (view) p.set('view', view);
+    for (const [k, s] of [['q', '#q'], ['status', '#fs'], ['priority', '#fp'], ['team', '#ft']]) if ($(s).value) p.set(k, $(s).value);
+    const r = await fetch('/api/items.csv?' + p, { headers: { Authorization: 'Bearer ' + token } });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = 'items.csv'; a.click(); };
+  $('#nb').onclick = async () => { const n = await api('/notifications'); $('#m').classList.add('split');
+    $('#detail').innerHTML = `<div class="panel"><h2>Notifications</h2>${n.length ? n.map((x) => `<div class="row" data-n="${x.item_id}"><span>#${x.item_id}</span><span>${esc(x.message)}</span><small>${new Date(x.created_at).toLocaleTimeString()}</small></div>`).join('') : '<div class="empty">No notifications yet.</div>'}</div>`;
+    document.querySelectorAll('[data-n]').forEach((el) => (el.onclick = () => open(+el.dataset.n))); };
+  $('#nf').onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(e.target)); f.team_id = +f.team_id; if (!f.due_date) delete f.due_date;
+    try { const it = await api('/items', { method: 'POST', body: f, key: createKey }); createKey = crypto.randomUUID(); e.target.reset(); toast(`Created #${it.id}`); loadList(true); open(it.id); }
+    catch (err) { toast(err.message, true); } };
+  loadList(true);
+}
+async function loadList(reset) {
+  if (reset) { cursor = null; $('#list').innerHTML = ''; counts(); }
+  const p = new URLSearchParams({ limit: 25 }); if (view) p.set('view', view); if (cursor) p.set('cursor', cursor);
+  for (const [k, s] of [['q', '#q'], ['status', '#fs'], ['priority', '#fp'], ['team', '#ft']]) if ($(s).value) p.set(k, $(s).value);
+  try {
+    const r = await api('/items?' + p);
+    if (reset && !r.items.length) $('#list').innerHTML = '<div class="empty">Nothing matches. Change the filters or create an item.</div>';
+    $('#list').insertAdjacentHTML('beforeend', r.items.map(row).join('')); cursor = r.next_cursor; $('#more').hidden = !cursor;
+    document.querySelectorAll('.row').forEach((el) => (el.onclick = () => open(+el.dataset.id)));
+  } catch (err) { toast(err.message, true); }
+}
+const row = (i) => `<div class="row ${cur?.id === i.id ? 'sel' : ''}" data-id="${i.id}" role="button" tabindex="0"><span>#${i.id}</span>
+  <span>${esc(i.title)}<br><small>${esc(i.team_name)} · ${label(i.type)} · ${esc(i.assignee_name || 'unassigned')}${i.due_date ? ` · <span style="${i.due_date < new Date().toISOString().slice(0, 10) && !['resolved', 'closed'].includes(i.status) ? 'color:var(--bad);font-weight:700' : ''}">due ${i.due_date}</span>` : ''}</small></span>
+  <span style="text-align:right"><span class="pri ${i.priority}">${i.priority}</span><br><small>${label(i.status)}</small></span></div>`;
+async function counts() {
+  const [c, m] = await Promise.all([api('/dashboard').catch(() => ({})), api('/metrics').catch(() => null)]);
+  if (m) $('#metrics').textContent = `Open ${m.by_status.open || 0} · In progress ${m.by_status.in_progress || 0} · Awaiting approval ${m.by_status.awaiting_approval || 0} · Overdue ${m.overdue} · Avg resolution ${m.avg_resolution_hours ?? 'n/a'} h · Busiest: ${m.workload.map((w) => w.name + ' ' + w.active).join(', ') || 'n/a'}`;
+  const tabs = [['', 'All'], ['assigned_to_me', 'Assigned to me'], ['unassigned_urgent', 'Unassigned urgent'], ['awaiting_my_approval', 'Awaiting my approval'], ['overdue', 'Overdue']];
+  $('#tabs').innerHTML = tabs.map(([v, l]) => `<button class="${view === v ? 'on' : ''}" data-v="${v}">${l}${v ? `<b>${c[v] ?? ''}</b>` : ''}</button>`).join('');
+  $('#tabs').querySelectorAll('button').forEach((b) => (b.onclick = () => { view = b.dataset.v; loadList(true); }));
+}
+async function open(id) {
+  try { cur = await api('/items/' + id); await renderDetail(); } catch (err) { toast(err.message, true); }
+}
+async function renderDetail(it = cur) {
+  const a = await api(`/items/${it.id}/activity`).catch(() => []);
+  const m = teams.find((t) => t.id === it.team_id)?.members || [];
+  const al = it.allowed;
+  $('#m').classList.add('split');
+  $('#detail').innerHTML = `<div class="panel"><h2>#${it.id} ${esc(it.title)}</h2>
+    <div class="meta">${esc(it.team_name)} · ${label(it.type)} · <b>${label(it.status)}</b> · v${it.version}<br>Owner: ${esc(it.assignee_name || 'unassigned')} · Created by ${esc(it.created_by_name)}${it.due_date ? ' · due ' + it.due_date : ''}</div>
+    <p>${esc(it.description) || '<small>No description.</small>'}</p>
+    <div class="actions">${al.claim ? '<button class="p" id="claim">Claim</button>' : ''}
+      ${al.transitions.map((t) => `<button data-to="${t}">${t === 'resolved' ? 'Approve & resolve' : '→ ' + label(t)}</button>`).join('')}</div>
+    ${al.edit ? `<div class="actions"><select id="ep">${['low','medium','high','urgent'].map((p) => `<option ${p === it.priority ? 'selected' : ''}>${p}</option>`).join('')}</select>
+      ${al.reassign ? `<select id="ea"><option value="">Unassigned</option>${m.map((u) => `<option value="${u.id}" ${u.id === it.assignee_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
+      <button id="save">Save changes</button></div>` : ''}
+    ${al.comment ? '<div class="actions"><input id="cm" placeholder="Add a comment" style="flex:1"><button id="cs">Comment</button></div>' : ''}
+    <h3>Activity</h3><div class="tl">${a.map(ev).join('')}</div></div>`;
+  const run = async (fn, optimistic) => {
+    const before = cur; if (optimistic) { cur = { ...cur, ...optimistic }; renderDetail(cur); }
+    try { cur = await fn(); toast('Saved'); }
+    catch (err) { cur = err.data?.item || before; toast(err.status === 409 ? `${err.message} Showing the latest version.` : err.message, true); }
+    renderDetail(cur); loadList(true);
+  };
+  const post = (p, body) => () => api(`/items/${it.id}/${p}`, { method: 'POST', body, key: crypto.randomUUID() });
+  $('#claim') && ($('#claim').onclick = () => run(post('claim'), { assignee_name: me.name, status: 'in_progress', allowed: { ...al, claim: false, transitions: [] } })); // optimistic, rolls back on 409
+  document.querySelectorAll('[data-to]').forEach((b) => (b.onclick = () => { const note = b.dataset.to === 'in_progress' && it.status === 'awaiting_approval' ? prompt('Reason for sending back?') || undefined : undefined; run(post('transition', { to: b.dataset.to, version: it.version, note })); }));
+  $('#save') && ($('#save').onclick = () => { const body = { version: it.version, priority: $('#ep').value }; if ($('#ea')) body.assignee_id = $('#ea').value ? +$('#ea').value : null;
+    run(() => api('/items/' + it.id, { method: 'PATCH', body })); });
+  $('#cs') && ($('#cs').onclick = async () => { if (!$('#cm').value.trim()) return; try { await api(`/items/${it.id}/comments`, { method: 'POST', body: { body: $('#cm').value } }); renderDetail(cur); } catch (e) { toast(e.message, true); } });
+}
+function ev(e) {
+  const d = e.data, w = new Date(e.at).toLocaleString();
+  const text = { created: 'created the item', comment: esc(d.body), priority_changed: `changed priority ${d.from} → ${d.to}`,
+    owner_changed: `changed owner ${esc(d.from_name || 'nobody')} → ${esc(d.to_name || 'nobody')}`,
+    status_changed: `moved ${label(d.from)} → ${label(d.to)}${d.note ? ' (' + esc(d.note) + ')' : ''}`, escalated: 'escalated: urgent and unassigned too long, leads notified', updated: `edited ${(d.fields || []).join(', ')}` }[e.kind] || e.kind;
+  return `<div><b>${esc(e.actor)}</b> ${text}<small>${w}</small></div>`;
+}
+boot().catch(() => loginView());
+</script></body></html>
